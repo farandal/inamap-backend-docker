@@ -1,0 +1,14 @@
+# Archivos con secretos: nunca a git
+.env
+.env.*
+!.env.example
+!.env.app.example
+
+# Datos de ejecución
+/storage/*
+!/storage/.gitkeep
+/reports/*
+!/reports/.gitkeep
+
+.DS_Store
+Thumbs.db
