@@ -1,0 +1,142 @@
+# ----------------------------------------------------------------------------
+# INAMAP — runtime local (Docker Compose)
+#
+# Corre el core DASHADMIN desde una IMAGEN publicada y monta el dominio INAMAP
+# (../inamap-backend-domain) en /var/www/dash/domain. No requiere el código
+# fuente del core: nada se monta desde ../dash-backend.
+#
+# Variables: .env (este directorio; Compose lo lee automáticamente).
+# Env de Laravel: el archivo indicado en APP_ENV_FILE (por defecto .env.app.local).
+#
+# Para quien sí tiene el core en disco: ver docker-compose.core-dev.yml.
+# ----------------------------------------------------------------------------
+name: ${COMPOSE_PROJECT_NAME:-inamap}
+
+services:
+  app:
+    image: "${DASH_IMAGE:?Defina DASH_IMAGE en .env (imagen del core DASHADMIN)}"
+    container_name: "${COMPOSE_PROJECT_NAME:-inamap}_app"
+    restart: unless-stopped
+    user: "0:0"
+    security_opt:
+      - seccomp:unconfined
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${APP_PORT:-25200}:80"
+      - "${REVERB_PUBLIC_PORT:-27001}:${REVERB_SERVER_PORT:-6001}"
+    environment:
+      WWWUSER: "${WWWUSER:-1000}"
+      # La imagen trae APP_ENV=production; una variable de entorno real gana
+      # sobre el .env montado, por eso se fuerza aquí.
+      APP_ENV: "${APP_ENV:-local}"
+      DB_CONNECTION: pgsql
+      DB_HOST: pgsql
+    volumes:
+      - "${APP_ENV_FILE:-./.env.app.local}:/var/www/dash/.env"
+      - "${APP_ENV_FILE:-./.env.app.local}:/var/www/dash/.env.production"
+      - "${DOMAIN_PATH:-../inamap-backend-domain}:/var/www/dash/domain:delegated"
+      - "./domain-config-layers:/var/www/dash/domain-config-layers:delegated"
+      - "./storage/app-storage:/var/www/dash/storage:delegated"
+      # Caché de rutas/config propia de este proyecto (entrypoint la regenera al iniciar).
+      - "./storage/bootstrap-cache:/var/www/dash/bootstrap/cache:delegated"
+      - "./reports:/var/www/dash/reports"
+      - "composer-cache:/.composer"
+    networks:
+      - inamap
+    depends_on:
+      pgsql:
+        condition: service_healthy
+      pgsql_setup:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  pgsql:
+    image: "postgres:17"
+    container_name: "${COMPOSE_PROJECT_NAME:-inamap}_pgsql"
+    restart: unless-stopped
+    ports:
+      - "${DB_FORWARD_PORT:-25434}:5432"
+    environment:
+      POSTGRES_DB: "${DB_DATABASE:-im_dev_db}"
+      POSTGRES_DB_TEST: "${DB_DATABASE_TEST:-im_dev_db_test}"
+      POSTGRES_USER: "${DB_USERNAME:-im}"
+      POSTGRES_PASSWORD: "${DB_PASSWORD:?Defina DB_PASSWORD en .env}"
+      PGPASSWORD: "${DB_PASSWORD}"
+    volumes:
+      # Bind mount: la base sobrevive a `docker compose down -v`.
+      - "./storage/pgsql-data:/var/lib/postgresql/data:delegated"
+      - "./docker/pgsql/create-testing-db.sh:/docker-entrypoint-initdb.d/10-create-testing-db.sh:ro"
+    networks:
+      - inamap
+    healthcheck:
+      test: ["CMD", "pg_isready", "-q", "-d", "${DB_DATABASE:-im_dev_db}", "-U", "${DB_USERNAME:-im}"]
+      interval: 5s
+      retries: 10
+      timeout: 5s
+
+  # Garantiza que existan la base principal y la de pruebas también cuando el
+  # volumen de datos ya existía (el init de postgres solo corre la primera vez).
+  pgsql_setup:
+    image: "postgres:17"
+    container_name: "${COMPOSE_PROJECT_NAME:-inamap}_pgsql_setup"
+    depends_on:
+      pgsql:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: pgsql
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: "${DB_DATABASE:-im_dev_db}"
+      POSTGRES_DB_TEST: "${DB_DATABASE_TEST:-im_dev_db_test}"
+      POSTGRES_USER: "${DB_USERNAME:-im}"
+      PGPASSWORD: "${DB_PASSWORD}"
+    entrypoint: ["/bin/sh", "-lc", "/setup/create-testing-db.sh && tail -f /dev/null"]
+    volumes:
+      - "./docker/pgsql/create-testing-db.sh:/setup/create-testing-db.sh:ro"
+    networks:
+      - inamap
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "psql -h pgsql -U $$POSTGRES_USER -d postgres -tAc \"SELECT 1 FROM pg_database WHERE datname = '$$POSTGRES_DB_TEST'\" | grep -q 1",
+        ]
+      interval: 5s
+      retries: 20
+      timeout: 5s
+    restart: unless-stopped
+
+  redis:
+    image: "redis:7-alpine"
+    container_name: "${COMPOSE_PROJECT_NAME:-inamap}_redis"
+    restart: unless-stopped
+    ports:
+      - "${REDIS_FORWARD_PORT:-25389}:6379"
+    volumes:
+      - "redis-data:/data"
+    networks:
+      - inamap
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      retries: 3
+      timeout: 5s
+
+  mailhog:
+    image: "mailhog/mailhog:latest"
+    platform: linux/amd64
+    container_name: "${COMPOSE_PROJECT_NAME:-inamap}_mailhog"
+    restart: unless-stopped
+    ports:
+      - "${MAILHOG_SMTP_PORT:-25029}:1025"
+      - "${MAILHOG_UI_PORT:-25030}:8025"
+    networks:
+      - inamap
+
+networks:
+  inamap:
+    driver: bridge
+
+volumes:
+  redis-data:
+  composer-cache:
