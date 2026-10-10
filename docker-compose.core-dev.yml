@@ -1,0 +1,36 @@
+# ----------------------------------------------------------------------------
+# OPCIONAL — solo para quien tiene el código del core (../dash-backend).
+#
+# Monta el código fuente del core sobre la imagen para editarlo en vivo.
+# Los desarrolladores del dominio INAMAP NO necesitan este archivo.
+#
+#   ./inamap.sh up --core-dev
+#   (equivale a: docker compose -f docker-compose.yml -f docker-compose.core-dev.yml up -d)
+#
+# vendor/ y la mayor parte de config/ siguen siendo los de la imagen; los
+# archivos de config listados abajo se montan uno a uno porque la imagen
+# puede traer una versión anterior.
+# ----------------------------------------------------------------------------
+services:
+  app:
+    volumes:
+      - "${CORE_PATH:-../dash-backend}/app:/var/www/dash/app:delegated"
+      - "${CORE_PATH:-../dash-backend}/bootstrap/app.php:/var/www/dash/bootstrap/app.php:ro"
+      - "${CORE_PATH:-../dash-backend}/bootstrap/providers.php:/var/www/dash/bootstrap/providers.php:ro"
+      - "${CORE_PATH:-../dash-backend}/database:/var/www/dash/database:delegated"
+      - "${CORE_PATH:-../dash-backend}/lang:/var/www/dash/lang:delegated"
+      - "${CORE_PATH:-../dash-backend}/public:/var/www/dash/public:delegated"
+      - "${CORE_PATH:-../dash-backend}/resources:/var/www/dash/resources:delegated"
+      - "${CORE_PATH:-../dash-backend}/routes:/var/www/dash/routes:delegated"
+      - "${CORE_PATH:-../dash-backend}/tests:/var/www/dash/tests:delegated"
+      - "${CORE_PATH:-../dash-backend}/phpunit.xml:/var/www/dash/phpunit.xml:ro"
+      - "${CORE_PATH:-../dash-backend}/config/app.php:/var/www/dash/config/app.php:ro"
+      - "${CORE_PATH:-../dash-backend}/config/broadcasting.php:/var/www/dash/config/broadcasting.php:ro"
+      - "${CORE_PATH:-../dash-backend}/config/filesystems.php:/var/www/dash/config/filesystems.php:ro"
+      - "${CORE_PATH:-../dash-backend}/config/horizon.php:/var/www/dash/config/horizon.php:ro"
+      - "${CORE_PATH:-../dash-backend}/config/logging.php:/var/www/dash/config/logging.php:ro"
+      - "${CORE_PATH:-../dash-backend}/config/reverb.php:/var/www/dash/config/reverb.php:ro"
+      - "${CORE_PATH:-../dash-backend}/config/services.php:/var/www/dash/config/services.php:ro"
+      - "${CORE_PATH:-../dash-backend}/config/subscription_plans.php:/var/www/dash/config/subscription_plans.php:ro"
+      - "${CORE_PATH:-../dash-backend}/config/system.php:/var/www/dash/config/system.php:ro"
+      - "${CORE_PATH:-../dash-backend}/docker/nginx/api.nginx.conf:/var/www/dash/docker/nginx/api.nginx.conf:ro"
