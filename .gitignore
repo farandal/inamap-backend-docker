@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 !.env.app.example
+!.env.tunnel.example
 
 # Datos de ejecución
 /storage/*

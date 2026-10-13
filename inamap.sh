@@ -3,7 +3,11 @@
 # INAMAP — utilitario del runtime local.
 #
 #   ./inamap.sh init              crea .env y .env.app.local con secretos nuevos
-#   ./inamap.sh up [--core-dev]   levanta el stack, migra y siembra la 1.ª vez
+#   ./inamap.sh up [--core-dev] [--tunnel]
+#                                 levanta el stack, migra y siembra la 1.ª vez;
+#                                 --tunnel además publica api-dev/ws-dev.inamap.space
+#   ./inamap.sh tunnel:init       crea .env.app.tunnel y .env.tunnel (una vez)
+#   ./inamap.sh tunnel            abre el Cloudflare Tunnel (en primer plano)
 #   ./inamap.sh down              detiene el stack (conserva la base de datos)
 #   ./inamap.sh restart           reinicia el contenedor app
 #   ./inamap.sh status            estado de los contenedores y procesos
@@ -16,6 +20,7 @@
 #   ./inamap.sh shell | tinker
 #
 # --core-dev monta el código del core (../dash-backend) — solo para el equipo del core.
+# --tunnel usa .env.app.tunnel (APP_URL/REVERB públicos) y queda recordado hasta `down`.
 # ----------------------------------------------------------------------------
 set -euo pipefail
 
@@ -24,6 +29,19 @@ cd "$(dirname "$0")"
 COMPOSE_FILES=(-f docker-compose.yml)
 if [[ " $* " == *" --core-dev "* ]] || [[ -f storage/.core-dev ]]; then
   COMPOSE_FILES+=(-f docker-compose.core-dev.yml)
+fi
+
+# Modo túnel: monta .env.app.tunnel en lugar de .env.app.local. Una variable de
+# entorno real gana sobre APP_ENV_FILE de .env, y el marcador lo recuerda entre
+# comandos (igual que --core-dev).
+TUNNEL_APP_ENV="./.env.app.tunnel"
+TUNNEL_ENV=".env.tunnel"
+TUNNEL_SCRIPT="../dash-backend-docker/scripts/cloudflare-tunnel.js"
+if [[ " $* " == *" --tunnel "* ]] || [[ -f storage/.tunnel ]] || [[ "${1:-}" == "tunnel" ]]; then
+  TUNNEL_MODE=1
+  export APP_ENV_FILE="$TUNNEL_APP_ENV"
+else
+  TUNNEL_MODE=0
 fi
 
 compose() { docker compose "${COMPOSE_FILES[@]}" "$@"; }
@@ -47,8 +65,8 @@ get_env() { grep -E "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2-; }
 require_env() {
   [[ -f .env ]] || fail "Falta .env — ejecute ./inamap.sh init"
   local app_env
-  app_env="$(get_env .env APP_ENV_FILE)"; app_env="${app_env:-./.env.app.local}"
-  [[ -f "$app_env" ]] || fail "Falta $app_env — ejecute ./inamap.sh init"
+  app_env="${APP_ENV_FILE:-$(get_env .env APP_ENV_FILE)}"; app_env="${app_env:-./.env.app.local}"
+  [[ -f "$app_env" ]] || fail "Falta $app_env — ejecute ./inamap.sh $([[ "$app_env" == "$TUNNEL_APP_ENV" ]] && echo tunnel:init || echo init)"
   [[ -d "$(get_env .env DOMAIN_PATH || echo ../inamap-backend-domain)" ]] || fail "No se encuentra el dominio (DOMAIN_PATH en .env)"
   [[ -n "$(get_env .env DASH_IMAGE)" && "$(get_env .env DASH_IMAGE)" != *"<tag>"* ]] || fail "Defina DASH_IMAGE en .env (imagen del core entregada por el equipo del core)"
 }
@@ -97,6 +115,43 @@ cmd_init() {
   prepare_dirs
 }
 
+cmd_tunnel_init() {
+  [[ -f .env.app.local ]] || fail "Falta .env.app.local — ejecute ./inamap.sh init primero"
+  if [[ ! -f .env.app.tunnel ]]; then
+    cp .env.app.local .env.app.tunnel
+    set_env .env.app.tunnel APP_URL "https://api-dev.inamap.space"
+    set_env .env.app.tunnel REVERB_HOST "ws-dev.inamap.space"
+    set_env .env.app.tunnel REVERB_PORT "443"
+    set_env .env.app.tunnel REVERB_SCHEME "https"
+    set_env .env.app.tunnel FRONTEND_URL "https://web-dev.inamap.space"
+    set_env .env.app.tunnel INAMAP_APP_URL "https://app-dev.inamap.space"
+    chmod 640 .env.app.tunnel
+    info "Creado .env.app.tunnel (copia de .env.app.local con APP_URL y Reverb públicos)."
+    info "FRONTEND_URL / INAMAP_APP_URL apuntan a web-dev / app-dev .inamap.space (frontends: ../inamap-frontend-domain, pnpm dev:tunnel:all)."
+  else
+    info ".env.app.tunnel ya existe; no se modifica."
+  fi
+  if [[ ! -f "$TUNNEL_ENV" ]]; then
+    cp .env.tunnel.example "$TUNNEL_ENV"
+    set_env "$TUNNEL_ENV" CF_TUNNEL_LOCAL_API "http://localhost:$(get_env .env APP_PORT)"
+    set_env "$TUNNEL_ENV" CF_TUNNEL_LOCAL_WS "http://localhost:$(get_env .env REVERB_PUBLIC_PORT)"
+    chmod 600 "$TUNNEL_ENV"
+    info "Creado $TUNNEL_ENV — complete CF_API_TOKEN y CF_ACCOUNT_ID (y CF_ZONE_ID si lo tiene)."
+  else
+    info "$TUNNEL_ENV ya existe; no se modifica."
+  fi
+}
+
+cmd_tunnel() {
+  [[ -f "$TUNNEL_ENV" ]] || fail "Falta $TUNNEL_ENV — ejecute ./inamap.sh tunnel:init"
+  [[ -f "$TUNNEL_SCRIPT" ]] || fail "No se encuentra $TUNNEL_SCRIPT (se necesita el repo dash-backend-docker como carpeta hermana)"
+  command -v node >/dev/null || fail "Falta node"
+  [[ -n "$(get_env "$TUNNEL_ENV" CF_API_TOKEN)" && -n "$(get_env "$TUNNEL_ENV" CF_ACCOUNT_ID)" ]] \
+    || fail "Complete CF_API_TOKEN y CF_ACCOUNT_ID en $TUNNEL_ENV"
+  info "Túnel: api-dev.inamap.space → :$(get_env .env APP_PORT) · ws-dev.inamap.space → :$(get_env .env REVERB_PUBLIC_PORT)"
+  exec node "$TUNNEL_SCRIPT" --env-file "$TUNNEL_ENV"
+}
+
 wait_for_app() {
   info "Esperando al contenedor app…"
   for _ in $(seq 1 60); do
@@ -112,6 +167,10 @@ cmd_up() {
   require_env
   prepare_dirs
   if [[ " $* " == *" --core-dev "* ]]; then touch storage/.core-dev; fi
+  if [[ "$TUNNEL_MODE" == 1 ]]; then
+    [[ -f .env.app.tunnel && -f "$TUNNEL_ENV" ]] || fail "Falta la config del túnel — ejecute ./inamap.sh tunnel:init"
+    touch storage/.tunnel
+  fi
 
   compose up -d
   wait_for_app
@@ -130,6 +189,11 @@ cmd_up() {
   echo "  Mailhog   http://localhost:$(get_env .env MAILHOG_UI_PORT)"
   echo "  Postgres  localhost:$(get_env .env DB_FORWARD_PORT) (usuario $(get_env .env DB_USERNAME))"
   echo "  Usuarios de prueba: ver SYSTEM_ADMIN_* / TENANT_ADMIN_* / NORMAL_USER_* en .env.app.local"
+
+  if [[ "$TUNNEL_MODE" == 1 ]]; then
+    echo "  Público   https://api-dev.inamap.space/api · wss://ws-dev.inamap.space"
+    cmd_tunnel
+  fi
 }
 
 cmd_logs() {
@@ -162,12 +226,14 @@ cmd_test() {
 command="${1:-help}"
 shift || true
 args=()
-for a in "$@"; do [[ "$a" == "--core-dev" ]] || args+=("$a"); done
+for a in "$@"; do [[ "$a" == "--core-dev" || "$a" == "--tunnel" ]] || args+=("$a"); done
 
 case "$command" in
   init)     cmd_init ;;
   up)       cmd_up "$@" ;;
-  down)     compose down; rm -f storage/.core-dev ;;
+  tunnel:init) cmd_tunnel_init ;;
+  tunnel)   cmd_tunnel ;;
+  down)     compose down; rm -f storage/.core-dev storage/.tunnel ;;
   restart)  compose restart app ;;
   status)   compose ps; compose exec app supervisorctl -c /etc/supervisor/supervisord.conf status || true ;;
   logs)     cmd_logs "${args[@]+"${args[@]}"}" ;;
@@ -178,5 +244,5 @@ case "$command" in
   artisan)  artisan "${args[@]+"${args[@]}"}" ;;
   shell)    compose exec app bash ;;
   tinker)   artisan tinker ;;
-  *)        sed -n '3,19p' "$0" ;;
+  *)        sed -n '3,26p' "$0" ;;
 esac

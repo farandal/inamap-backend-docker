@@ -59,6 +59,26 @@ Los cambios en `../inamap-backend-domain` se ven al instante: está montado en e
 contenedor. Tras cambiar **rutas o config** del dominio: `./inamap.sh restart`
 (la caché de rutas/config se regenera al iniciar).
 
+## Desarrollo público (Cloudflare Tunnel)
+
+Publica el stack local en `https://api-dev.inamap.space` (API) y `wss://ws-dev.inamap.space`
+(Reverb), para frontends desplegados o dispositivos externos. Reutiliza
+`../dash-backend-docker/scripts/cloudflare-tunnel.js` (repo hermano necesario, con `node` y
+`cloudflared` instalados).
+
+```bash
+./inamap.sh tunnel:init     # una vez: crea .env.app.tunnel y .env.tunnel
+# editar .env.tunnel → CF_API_TOKEN y CF_ACCOUNT_ID (zona inamap.space)
+./inamap.sh up --tunnel     # levanta el stack con la env pública y abre el túnel
+./inamap.sh tunnel          # solo el túnel, si el stack ya corre
+```
+
+- `.env.app.tunnel` es copia de `.env.app.local` con `APP_URL`, `REVERB_HOST/PORT/SCHEME`
+  públicos (misma base de datos y claves). `--tunnel` queda recordado hasta `./inamap.sh down`.
+- La primera vez el script crea el túnel `inamap-dev`, los CNAME y guarda `CF_TUNNEL_TOKEN`
+  en `.env.tunnel`. Ambos archivos están fuera de git.
+- Si los frontends también se publican, ajuste `FRONTEND_URL` / `INAMAP_APP_URL` en `.env.app.tunnel`.
+
 ## Archivos
 
 | Archivo | Qué es | ¿Va a git? |
@@ -68,6 +88,7 @@ contenedor. Tras cambiar **rutas o config** del dominio: `./inamap.sh restart`
 | `inamap.sh` | Utilitario de comandos | Sí |
 | `.env.example` / `.env` | Variables de Compose: imagen, puertos, credenciales de BD | Solo el ejemplo |
 | `.env.app.example` / `.env.app.local` | Env de Laravel montado en el contenedor | Solo el ejemplo |
+| `.env.tunnel.example` / `.env.tunnel` · `.env.app.tunnel` | Túnel de Cloudflare y env de Laravel pública | Solo el ejemplo |
 | `docker/pgsql/create-testing-db.sh` | Crea la base principal y la de pruebas | Sí |
 | `domain-config-layers/` | Capas de config opcionales (vacío por defecto) | Sí |
 | `storage/` | Datos de ejecución: archivos subidos, logs, caché, datos de PostgreSQL | No |
